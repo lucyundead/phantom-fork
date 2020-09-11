@@ -177,6 +177,49 @@ ifeq ($(SETUP), galdisc)
     KNOWN_SETUP=yes
 endif
 
+ifeq ($(SETUP), galdiscmod)
+#   modified galdics run
+        IND_TIMESTEPS=yes
+        MAXP=20000000
+        KERNEL=quintic
+        H2CHEM=yes
+        ISOTHERMAL=no
+        GRAVITY=no
+        HDF5=no
+        HDF5ROOT=/home/zli/soft/hdf5_parallel
+        MHD=no
+        DUST=no
+        SETUPFILE= setup_galdiscmod.f90
+        KNOWN_SETUP=yes
+        OPENMP=yes
+#        MPI=hpcluster
+#        NCELLSMAX=8000000
+endif
+
+ifeq ($(SETUP), ringformation)
+#   modified galdics run
+        IND_TIMESTEPS=yes
+        MAXP=20000000
+        KERNEL=quintic
+        H2CHEM=yes
+        ISOTHERMAL=no
+        GRAVITY=no
+        HDF5=no
+        HDF5ROOT=/share/home/jtshen/soft/hdf5
+        MHD=no
+        DUST=no
+        SETUPFILE= setup_nuclearring.f90
+        KNOWN_SETUP=yes
+        OPENMP=yes
+        MPI=no
+#        ANALYSIS= analysis_angmom.f90
+#        MODFILE = moddump_cs.f90
+#        LIVE_ANALYSIS=yes
+#        NCELLSMAX=8000000
+endif
+
+
+
 ifeq ($(SETUP), galdiscmhd)
 #   galactic disc simulations with magnetic fields
     IND_TIMESTEPS=yes

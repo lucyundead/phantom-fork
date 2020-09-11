@@ -44,7 +44,7 @@ module extern_spiral
  public :: s_potential,schmidt_potential,pichardo_potential,initialise_spiral,&
            LogDisc,MNDisc,KFDiscSp,PlumBul,HernBul,HubbBul,COhalo,Flathalo,AMhalo,&
            KBhalo,LMXbar,LMTbar,Orthog_basisbar,DehnenBar,VogtSbar,Wadabar,&
-           BINReadPot3D,NFWhalo
+           FerrersBar,SormaniBar,LogBar,Junqueira2013,BINReadPot3D,NFWhalo
  public :: write_options_spiral, read_options_spiral
  real(kind=8) :: r0,rS,p0,Hz,Co,Rc,Rtot,rhalomax,HaloCi,dzq
  real(kind=8) :: Cz(3)
@@ -54,19 +54,21 @@ module extern_spiral
  real(kind=8) :: a_0,c_0,d_0,e_0,Ri,Rf,Rl,Rsarms,Nshape,Mspiral,a_02,c_02,e_02
  real(kind=8) :: ra1,ra2,ra3,rsK,phi0,eta_Khop,tau_arm,rbars,rho0b,rlim,StrBarW, &
        StrBarD,radiusofbar,VoB,Rob,alphaBar,MNmdisk,MNadisk,MNbdisk,AMmhalo,AMrhalo,rLhalo,&
+       Qmferrs,idxferrs,aferrs,bferrs,fullBS,Mferrs,coefferrs,rhoferrs,gammafun,&
+       pitch_sp,ri_sp,gamma_sp1,gamma_sp2,gua_r_sp,gua_rsig_sp,zeta_sp,sigma_sp,m_sp,epsilon_sp,&
        potxmax,potymax,potzmax,dxpot,dypot,dzpot,Mnfw,Cnfw,rnfw
  real(kind=8), allocatable :: spiralsum(:)
  real(kind=8), allocatable :: Rspheroids(:,:),shapefn(:,:),den0(:,:)
  integer :: Nt,NNi,j,jj,i,ios
  character(len=100) :: potfilename
  integer :: potlenx, potleny, potlenz
- real(kind=8), allocatable :: newpot3D(:,:,:)
+ real(kind=8), allocatable :: newpot3D(:,:,:),newpot3D_initial(:,:,:)
 
 
 !
 !--the following are parameters to be written/read from the input file
 !
- integer      :: idisk=  1       !Disk id flag
+ integer      :: idisk=  0       !Disk id flag
 !--1: B&T log-disk
 !--2: M&N flattened-disk
 !--3: K&F Freeman-disk with build in bar/arm pretubation
@@ -85,6 +87,7 @@ module extern_spiral
 !--2:P&M linear density inside spheroids(a)  linear density from galactic centre(r)
 !--3:P&M linear density inside spheroids(a), log density from galactic centre(r)
 !--4:P&M inverse density inside spheroids(a),linear density from galactic centre(r)
+!--5:Junqueira2013 spiral
  integer      :: ibar =  0
 !--1:L&M biaxial bar
 !--2:L&M triaxial bar
@@ -92,13 +95,16 @@ module extern_spiral
 !--4:Dehnen cosine bar
 !--5:V&L S-shape bar
 !--6:Wada Bar
- integer      :: iread =  0        !Read in potential file?
+!--7:Ferres Bar
+!--8:Sormani Bar
+!--9:Logarithmic bar
+ integer      :: iread =  1        !Read in potential file?
 !--0: Dont read in
 !--1: Read in
  real(kind=8) :: NN     = 2.      ! should be integer, but used in real expressions
  real(kind=8) :: phibar = 40.0    !km/s/kpc, for bars from Dehnen99
- real(kind=8) :: phir   = 20.0    !km/s/kpc, for arms
- real(kind=8) :: alpha  = 15.0    !The arm pitch angle in deg
+ real(kind=8) :: phir   = 00.0    !km/s/kpc, for arms
+ real(kind=8) :: alpha  = 0.0     !The arm pitch angle in deg
  real(kind=8) :: LMabar = 4.00    !Bar major axis (x1kpc)
  real(kind=8) :: LMbbar = 1.0     !Bar minor axis (x1kpc)
  real(kind=8) :: LMcbar = 1.0     !Bar minor axis (x1kpc), triaxial bar
@@ -131,9 +137,9 @@ subroutine write_options_spiral(iunit)
  call write_inopt(idisk,'idisk','type of disk potential (1:log 2:flattened 3:Freeman w. bar/arm)',iunit)
  call write_inopt(ibulg,'ibulg','type of bulge potential (1:Plummer 2:Hernquist 3:Hubble)',iunit)
  call write_inopt(ihalo,'ihalo','type of halo potential (1:C&O 2:Flat 3:A&M 4:K&B 5:NFW)',iunit)
- call write_inopt(iarms,'iarms','type of arm potential (1:C&G 2:4 P&M spheroids+linear)',iunit)
+ call write_inopt(iarms,'iarms','type of arm potential (1:C&G 2:4 P&M spheroids+linear,5:Junqueira)',iunit)
  call write_inopt(ibar,'ibar',&
-     'type of bar potential (1:biaxial 2:triaxial 3:G2G3 4:Dehnen cos 5:S-shape 6:Wada cos)',iunit)
+     'type of bar potential (1:biaxial 2:triaxial 3:G2G3 4:Dehnen cos 5:S-shape 6:Wada cos 7:Ferrers 8:Sormani 9:LogBar)',iunit)
  call write_inopt(iread,'iread','Read in potential from file (1=y,0=n)',iunit)
  call write_inopt(NN,'NN','No of arms in stellar spiral potential',iunit)
  call write_inopt(alpha,'pitchA','Pitch angle of spiral arms (deg)',iunit)
@@ -234,7 +240,7 @@ end subroutine read_options_spiral
 
 !----------------------------------------------------------------
 subroutine initialise_spiral(ierr)
- use physcon, only:pc,solarm,pi,gg,kpc,km
+ use physcon, only:pc,solarm,pi,gg,kpc,km,years
  use units,   only:udist,umass,utime
  use io,      only:id,master
  integer, intent(out) :: ierr
@@ -261,12 +267,12 @@ subroutine initialise_spiral(ierr)
 
  !=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=DISKS=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
  !--Dobbs&B&P log-disk potential.
- Rc  = 1.0 *kpc/udist        !1kpc was 0.1kpc, C.Dobbs changed for ring
- Co  = (2.31d14*(utime)**2/udist**2) !Co=(Vc^2)/2 at Ro(=8kpc) Vc=215km/s
- dzq = 1./0.7                        !z potential constant
+ Rc  = 0.05 *kpc/udist             !1kpc was 0.1kpc, C.Dobbs changed for ring
+ Co  = (2.d14*(utime)**2/udist**2) !Co=(Vc^2)/2 at Ro(=8kpc) Vc=200km/s
+ dzq = 1.                          !z potential constant
  !--Miyamoto&Naigi disk
- MNmdisk = 8.56 * 1.0d10*solarm/umass
- MNadisk = 5.3178*kpc/udist
+ MNmdisk = 2.2 * 1.0d11*solarm/umass
+ MNadisk = 14.1*kpc/udist
  MNbdisk = 0.2500*kpc/udist
  !--Modified Freeman (Type II) disk
  Mdisk   = 4.0 * 1.0d10*solarm/umass
@@ -303,9 +309,9 @@ subroutine initialise_spiral(ierr)
  Mbulge  = 1.4 * 1.0d10*solarm/umass
  Rbulge  = 0.39*kpc/udist
  !--Hubble bulge (only the inverse of the constant is used):
- MHubbbulge  = 3.0* 1.0d10*solarm/umass  !Khop says: 0.92*(1.99d43/umass)
- RHubbbulge  = 0.2 *kpc/udist
- rHubbMax    = 12.0*kpc/udist
+ MHubbbulge  = 3.30276* 1.0d10*solarm/umass  !Khop says: 0.92*(1.99d43/umass)
+ RHubbbulge  = 0.33 *kpc/udist
+ rHubbMax    = 10.0*kpc/udist
  HubbCi  = 1./( log(rHubbMax/RHubbbulge + sqrt(1.+(rHubbMax/RHubbbulge)**2)) &
    - rHubbMax/(RHubbbulge*sqrt(1.+(rHubbMax/RHubbbulge)**2))  )
 
@@ -328,6 +334,21 @@ subroutine initialise_spiral(ierr)
  epsBar      = 0.05
  rcore       = 2.d0*kpc/udist
  StrBarW     = epsBar*VoB*VoB*2.59807621   !sqrt(27/4)
+ !--Ferrers Bar:
+ Qmferrs   = 4.5e10*(solarm/umass)*(kpc/udist)**2
+ aferrs    = 5.0*kpc/udist
+ bferrs    = 2.0*kpc/udist
+ idxferrs  = 1.0
+ gammafun  = 60.0
+ fullBS    = 1.0*2*pi/(phibar)
+ fullBS    = 100.*1.0d6*years/utime        ! 100 Myr
+ rhoferrs  = Qmferrs*(5.0+2.0*idxferrs)/(2.0**(2*idxferrs+3)*pi&
+                    *aferrs*bferrs*bferrs*aferrs*aferrs&
+                    *(1.0-1.0/(aferrs/bferrs)**2))*gammafun
+ coefferrs = -pi*gcode*rhoferrs*aferrs*bferrs*bferrs/(idxferrs+1.0)
+ Mferrs    = 2.0**(2*idxferrs+3)*pi*aferrs&
+                    *bferrs*bferrs*rhoferrs/gammafun
+
 
  !=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=SPIRALS=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
  !--Global spiral parameters, pitch and velocity:
@@ -362,6 +383,17 @@ subroutine initialise_spiral(ierr)
  Rl    =2.50*kpc/udist
  Nshape=100.0d0
  strength= -12.5663706*gcode*(sqrt(1.0-e_02)/(e_02*e_02))
+ !--Junqueira2013 spiral paramters used in Li et al 2016
+ m_sp      = 2.0
+ pitch_sp  = 12.5
+ ri_sp     = 8.0  * kpc/udist
+ gamma_sp1 = 139.5
+ gamma_sp2 = 69.75
+ gua_r_sp  = 9.0  * kpc/udist
+ gua_rsig_sp = 1.5* kpc/udist
+ zeta_sp   = -800.0* 1.02271**2*(kpc/(1.0d9*years))**2/(udist/utime)**2
+ sigma_sp  = 2.35 * kpc/udist
+ epsilon_sp= 4.0  * kpc/udist
 
  select case(iarms)
  case(2,3,4)
@@ -432,11 +464,14 @@ subroutine initialise_spiral(ierr)
     potxmax     = potxmax*kpc/udist
     potymax     = potymax*kpc/udist
     potzmax     = potzmax*kpc/udist
-    dxpot       = 2.d0*potxmax/potlenx
-    dypot       = 2.d0*potymax/potleny
-    dzpot       = 2.d0*potzmax/potlenz
+    dxpot       = 2.d0*potxmax/(potlenx - 1)
+    dypot       = 2.d0*potymax/(potleny - 1)
+    dzpot       = 2.d0*potzmax/(potlenz - 1)
+
     allocate(newpot3D(potlenz,potlenx,potleny))
     read (1) newpot3D
+    allocate(newpot3D_initial(potlenz,potlenx,potleny))
+    read (1) newpot3D_initial
     close(1)
     if (id==master) then
        print*,'Potential file read in successfully.'
@@ -1079,6 +1114,113 @@ function betafn(om2,z2)
  return
 end function betafn
 
+!--Junqueiral spiral --: galactic spiral potential from Junqueira et al. 2013
+!----------------------------------------------------------------
+
+subroutine Junqueira2013(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+
+ real, intent(in)    :: xi,yi,zi,ti
+ real, intent(inout) :: phi,fextxi,fextyi,fextzi
+ real(kind=8)  :: xir,yir,zir,fxispi,fyispi,fzispi,angle
+ real(kind=8)  :: fxisp,fyisp,fzisp,potsp,delta
+
+ !-- calculate how much degree the spiral has rotated
+ !-- note here we need to make x = -x to reverse the spiral shape
+
+ angle = -1.*ti*phir
+ xir = xi*cos(angle)-yi*sin(angle)
+ yir = xi*sin(angle)+yi*cos(angle)
+ zir = zi
+
+ potsp = Junqueirapot(xir,yir,zir)
+
+!--numerically calculate the force
+ delta = 0.1
+
+ fxispi = -(Junqueirapot(xir+delta,yir,zir) - &
+            Junqueirapot(xir-delta,yir,zir))/(2.*delta)
+ fyispi = -(Junqueirapot(xir,yir+delta,zir) - &
+            Junqueirapot(xir,yir-delta,zir))/(2.*delta)
+ fzispi = -(Junqueirapot(xir,yir,zir+delta) - &
+            Junqueirapot(xir,yir,zir-delta))/(2.*delta)
+
+!--Rotate the reference frame of the forces back to those of the observer,
+!--rather than the bar.
+
+ fxisp = fxispi*cos(-angle)-fyispi*sin(-angle)
+ fyisp = fxispi*sin(-angle)+fyispi*cos(-angle)
+ fzisp = fzispi
+
+ !--Update the input forces/potential
+ if (ti <= fullBS) then
+    phi    = phi    + potsp*ti/fullBS
+    fextxi = fextxi + fxisp*ti/fullBS
+    fextyi = fextyi + fyisp*ti/fullBS
+    fextzi = fextzi + fzisp*ti/fullBS
+ else
+    phi    = phi    + potsp
+    fextxi = fextxi + fxisp
+    fextyi = fextyi + fyisp
+    fextzi = fextzi + fzisp
+
+ endif
+
+ return
+
+end subroutine Junqueira2013
+
+function Junqueirapot(xi,yi,zi)
+ use physcon, only:kpc,pi
+ use units,   only:udist
+
+ implicit none
+ real(kind=8), intent(in) :: xi,yi,zi
+ real(kind=8) :: fm1,fm2,k,Junqueirapot,phi_sp,rad
+ real(kind=8) :: x_sp,y_sp,z_sp
+
+ x_sp = -xi          !-- x <-> -x symmetry
+ y_sp =  yi
+ z_sp =  zi
+
+ rad = sqrt(x_sp**2+y_sp**2)
+
+ if ( y_sp >= 0.0) then
+
+    phi_sp=acos(x_sp/rad)
+
+ else
+
+    phi_sp=2.0*pi-acos(x_sp/rad)
+
+ endif
+
+ fm1 = m_sp*(1./tan(pitch_sp*pi/180.)*log(rad/ri_sp)+(gamma_sp1*pi/180.))
+ fm2 = m_sp*(1./tan(pitch_sp*pi/180.)*log(rad/ri_sp)+(gamma_sp2*pi/180.))
+
+ k = m_sp/(rad*tan(pitch_sp*pi/180.))
+
+ if ( rad >= gua_r_sp ) then
+
+    Junqueirapot = zeta_sp*rad*exp(-(rad/sigma_sp)**2                   &
+                  *(1-cos(m_sp*phi_sp-fm1))-rad/epsilon_sp-abs(k*z_sp)) &
+                  +zeta_sp*rad*exp(-(rad/sigma_sp)**2                   &
+                  *(1-cos(m_sp*phi_sp-fm2))-rad/epsilon_sp-abs(k*z_sp))
+ else
+
+    Junqueirapot = zeta_sp*rad*exp(-(rad/sigma_sp)**2                   &
+                  *(1-cos(m_sp*phi_sp-fm1))-rad/epsilon_sp-abs(k*z_sp)) &
+                  *exp(-(rad-gua_r_sp)**2/(2.0*(gua_rsig_sp)**2))       &
+                  +zeta_sp*rad*exp(-(rad/sigma_sp)**2                   &
+                  *(1-cos(m_sp*phi_sp-fm2))-rad/epsilon_sp-abs(k*z_sp)) &
+                  *exp(-(rad-gua_r_sp)**2/(2.0*(gua_rsig_sp)**2))
+ endif
+
+
+ return
+
+end function
+
+
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !~~~~BARS~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1425,6 +1567,243 @@ subroutine VogtSbar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
  return
 end subroutine VogtSbar
 
+!--Ferrers bar--: Ferrers prolate ellipsiod 
+!----------------------------------------------------------------
+subroutine FerrersBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+
+ use physcon, only:pc,solarm,pi,gg,kpc,km,years
+ use units,   only:udist,umass
+
+ real, intent(in)    :: xi,yi,zi,ti
+ real, intent(inout) :: phi,fextxi,fextyi,fextzi
+ real(kind=8)  :: xi2,yi2,zi2,a2,b2,lambda,dlambda,costh,sinth,tanth,&
+                  w00,w01,w10,w11,w20,w02,w21,w12,w30,w03,&
+                  fxib,fyib,fzib,potb,fxis,fyis,fzis,pots
+ real(kind=8)  :: d2,r,dr,rratio1,r2term1,Hubbforce1,rratio2,r2term2,Hubbforce2,&
+                  HubbCi2,RHubbbulge2,MHubbbulge2,rHubbMax2
+
+ real(kind=8)  :: xir,yir,zir,fxibi,fyibi,fzibi,angle
+
+ !-- calculate how much degree the bar has rotated
+
+ angle = -1.*ti*phibar
+ xir = xi*cos(angle)-yi*sin(angle)
+ yir = xi*sin(angle)+yi*cos(angle)
+ zir = zi
+
+ xi2 = xir * xir
+ yi2 = yir * yir
+ zi2 = zir * zir
+ a2  = aferrs*aferrs
+ b2  = bferrs*bferrs
+
+ if ( (yi2/a2+xi2/b2+zi2/b2) > 1.0 ) then
+
+    lambda = (-(a2+b2-xi2-yi2-zi2) + sqrt((a2+b2-xi2-yi2-zi2)**2&
+           - 4.0*(a2*b2-yi2*b2-xi2*a2-zi2*a2)))/2.0
+ else
+
+    lambda = 0.
+
+ endif
+
+ dlambda = (b2+lambda)*sqrt(a2+lambda)
+ costh = sqrt((b2+lambda)/(a2+lambda))
+ sinth = sqrt(1.0-costh**2)
+ tanth = sinth/costh
+
+ w00 = log((1.0+sinth)/costh)*2.0/sqrt(a2-b2)
+ w10 = 2.0/sqrt((a2-b2)*(a2-b2)**2) * (log((1.0+sinth)/costh)-sinth)
+ w01 = tanth**2*sinth/sqrt((a2-b2)**2*(a2-b2)) - w10/2.0
+ w11 = (w01 - w10)/(a2-b2)
+ w20 = 2.0/3.0*(1.0/dlambda/(a2+lambda) - w11)
+ w02 = 1.0/4.0*(2.0/dlambda/(b2+lambda) - w11)
+ w21 = (w11 - w20)/(a2-b2)
+ w12 = (w02 - w11)/(a2-b2)
+ w30 = 2.0/5.0*(1.0/dlambda/(a2+lambda)**2 - w21)
+ w03 = 1.0/6.0*(2.0/dlambda/(b2+lambda)**2 - w12)
+
+ potb = coefferrs*(w00+xi2*(xi2*w02+2.0*yi2*w11-2.0*w01)&
+                      +yi2*(yi2*w20+2.0*zi2*w11-2.0*w10)&
+                      +zi2*(zi2*w02+2.0*xi2*w02-2.0*w01))
+
+ fxibi = -4.* coefferrs * xir * (xi2*w02 + yi2*w11 + zi2*w02 - w01)
+ fyibi = -4.* coefferrs * yir * (xi2*w11 + yi2*w20 - w10)
+ fzibi = -4.* coefferrs * zir * (zi2*w02 + yi2*w11 + xi2*w02 - w01)
+
+!--Rotate the reference frame of the forces back to those of the observer,
+!--rather than the bar.
+
+ fxib = fxibi*cos(-angle)-fyibi*sin(-angle)
+ fyib = fxibi*sin(-angle)+fyibi*cos(-angle)
+ fzib = fzibi
+
+!-------initially represented by a hubble bulge
+
+ d2   = (xi*xi + yi*yi)
+ dr   = 1./sqrt(d2+zi*zi)
+ r    = 1./dr
+
+ MHubbbulge2  = 4.90678 * 1.0d10*solarm/umass
+ RHubbbulge2  = 0.38*kpc/udist
+ rHubbMax2    = 10.0*kpc/udist
+ HubbCi2      = 1./( log(rHubbMax2/RHubbbulge2 + sqrt(1.+(rHubbMax2/RHubbbulge2)**2)) &
+                - rHubbMax2/(RHubbbulge2*sqrt(1.+(rHubbMax2/RHubbbulge2)**2)) )
+
+ rratio1    = r/RHubbbulge
+ r2term1    = sqrt(1.0 + rratio1*rratio1)
+ Hubbforce1 = MHubbbulge *gcode*HubbCi *(dr*dr*log(rratio1+r2term1) &
+             - dr/(RHubbbulge *r2term1))
+ rratio2    = r/RHubbbulge2
+ r2term2    = sqrt(1.0 + rratio2*rratio2)
+ Hubbforce2 = MHubbbulge2*gcode*HubbCi2*(dr*dr*log(rratio2+r2term2) &
+             - dr/(RHubbbulge2*r2term2))
+
+ pots = - dr*HubbCi2*gcode*MHubbbulge2*log(r/RHubbbulge2 + r2term2)&
+        + dr*HubbCi *gcode*MHubbbulge *log(r/RHubbbulge  + r2term1)
+ fxis = - xi*dr*Hubbforce2 + xi*dr*Hubbforce1
+ fyis = - yi*dr*Hubbforce2 + yi*dr*Hubbforce1
+ fzis = - zi*dr*Hubbforce2 + zi*dr*Hubbforce1
+
+ !--Update the input forces/potential
+ if (ti <= fullBS) then
+    phi    = phi    + potb*ti/fullBS + pots*(1.0-ti/fullBS)
+    fextxi = fextxi + fxib*ti/fullBS + fxis*(1.0-ti/fullBS)
+    fextyi = fextyi + fyib*ti/fullBS + fyis*(1.0-ti/fullBS)
+    fextzi = fextzi + fzib*ti/fullBS + fzis*(1.0-ti/fullBS)
+ else
+    phi    = phi    + potb
+    fextxi = fextxi + fxib
+    fextyi = fextyi + fyib
+    fextzi = fextzi + fzib
+ endif
+
+ return
+end subroutine FerrersBar
+
+!--Sormani bar--:barred quadrapole from Sormani et al. 2015
+!----------------------------------------------------------------
+subroutine SormaniBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+
+ use physcon, only:pc,solarm,pi,gg,kpc,km,years
+ use units,   only:udist,umass,utime
+
+ real(kind=8), intent(in)    :: xi,yi,zi,ti
+ real(kind=8), intent(inout) :: phi,fextxi,fextyi,fextzi
+
+ real(kind=8) :: xir,yir,zir,fxibi,fyibi,fzibi,angle
+ real(kind=8) :: r3d,t3d,p3d
+ real(kind=8) :: fxib,fyib,fzib,potb,dPhidxyz(3)
+
+ !-- calculate how much degree the bar has rotated
+
+ angle = -1.*ti*phibar
+ xir = xi*cos(angle)-yi*sin(angle)
+ yir = xi*sin(angle)+yi*cos(angle)
+ zir = zi
+
+ r3d = sqrt(xir*xir + yir*yir + zir*zir)
+ t3d = acos(zir/r3d)
+ p3d = atan2(yir,xir)
+
+ call Phi2(r3d,t3d,p3d,potb)
+ call dPhi2dxyz(xir, yir, zir, dPhidxyz)
+
+ fxibi = -dPhidxyz(1)
+ fyibi = -dPhidxyz(2)
+ fzibi = -dPhidxyz(3)
+
+!--Rotate the reference frame of the forces back to those of the observer,
+!--rather than the bar.
+
+ fxib = fxibi*cos(-angle)-fyibi*sin(-angle)
+ fyib = fxibi*sin(-angle)+fyibi*cos(-angle)
+ fzib = fzibi
+
+ !--convert the physical units to simulation units
+
+ potb = potb*1.0d14/(udist**2/utime**2)
+ fxib = fxib*(1.0d14/kpc)/(udist/utime**2)
+ fyib = fyib*(1.0d14/kpc)/(udist/utime**2)
+ fzib = fzib*(1.0d14/kpc)/(udist/utime**2)
+
+ !--Update the input forces/potential
+ if (ti <= fullBS) then
+    phi    = phi    + potb*ti/fullBS
+    fextxi = fextxi + fxib*ti/fullBS
+    fextyi = fextyi + fyib*ti/fullBS
+    fextzi = fextzi + fzib*ti/fullBS
+ else
+    phi    = phi    + potb
+    fextxi = fextxi + fxib
+    fextyi = fextyi + fyib
+    fextzi = fextzi + fzib
+ endif
+
+ return
+
+end subroutine SormaniBar
+
+!--Lograthmic bar--: a rotationg log disk potential (Sormani & Li 2020) 
+!----------------------------------------------------------------
+
+subroutine LogBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+
+ use physcon, only:pc,solarm,pi,gg,kpc,km,years
+ use units,   only:udist,umass,utime
+
+ real, intent(in)    :: xi,yi,zi,ti
+ real, intent(inout) :: phi,fextxi,fextyi,fextzi
+ real(kind=8)  :: r2term,dr2term,fxib,fyib,fzib,potb
+ real(kind=8)  :: r2terms,dr2terms,fxis,fyis,fzis
+ real(kind=8)  :: xir,yir,zir,fxibi,fyibi,fzibi,angle
+ real(kind=8)  :: Rc,v0,q,q2,Co,frac,Potconst
+
+ Rc = 0.05  *kpc/udist             ! kpc to simulation unit
+ v0 = 200.*1.0d5/(udist/utime)     ! km/s to simulation unit
+ Co = (v0*v0)/2.
+ q  = 0.9
+
+ q2 = q*q
+ frac = min(ti/fullBS,1.0)
+
+ Potconst = 2.*log((1.+q)*(1.+q)/(4*q))
+
+ angle = -1.*ti*phibar
+ xir = xi*cos(angle)-yi*sin(angle)
+ yir = xi*sin(angle)+yi*cos(angle)
+ zir = zi
+
+ r2term   = Rc**2 + xir**2 + (yir**2 + zir**2)/q2
+ r2terms  = Rc**2 + xi**2 +  yi**2 + zi**2
+ dr2term  = 1./r2term
+ dr2terms = 1./r2terms
+
+ potb     = +Co*(log(r2term)-Potconst)      !Co=0.5*v0^2
+ fxibi    = -2.*Co*xir*dr2term
+ fyibi    = -2.*Co*yir*dr2term/q2
+ fzibi    = -2.*Co*zir*dr2term/q2
+
+ fxis     = -2.*Co*xi*dr2terms
+ fyis     = -2.*Co*yi*dr2terms
+ fzis     = -2.*Co*zi*dr2terms
+
+
+ fxib = fxibi*cos(-angle)-fyibi*sin(-angle)
+ fyib = fxibi*sin(-angle)+fyibi*cos(-angle)
+ fzib = fzibi
+
+ !--Update the input forces/potential
+ phi    = phi    + potb
+ fextxi = fextxi + (fxib*frac + fxis*(1-frac))
+ fextyi = fextyi + (fyib*frac + fyis*(1-frac))
+ fextzi = fextzi + (fzib*frac + fzis*(1-frac))
+
+ return
+
+end subroutine LogBar
+
+
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !~~~~SOFTENER~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1462,42 +1841,665 @@ subroutine BINReadPot3D(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
  use physcon, only:pi
  real, intent(in)    :: xi,yi,zi,ti
  real, intent(inout) :: phi,fextxi,fextyi,fextzi
- real    :: fxi,fyi,fzi,xir,yir,zir,fextxr,fextyr,fextzr,&
-   pot
- integer :: xindex, yindex, zindex
+ real(kind=8)    :: fxi,fyi,fzi,xir,yir,zir
+ real(kind=8)    :: fextxr,fextyr,fextzr,pot,angle
+ real(kind=8)    :: xp1,xm1,yp1,ym1,zp1,zm1
 
- !--Rotate our reference frame so the arms are still x-allinged.
- xir = xi*cos(ti*phir)-yi*sin(ti*phir)
- yir = xi*sin(ti*phir)+yi*cos(ti*phir)
+ !-- calculate how much degree the bar has rotated
+ !-- and Rotate our reference frame so the bar are still x-allinged.
+ angle = -1.*ti*phibar
+ xir = xi*cos(angle)-yi*sin(angle)
+ yir = xi*sin(angle)+yi*cos(angle)
  zir = zi
 
- !--Use the array here, i.e. this routine will put the particles in
- !--an appropriate grid cell and simply read in fextxi, fextyi, fextzi.
- !--The +1 grid cell is because there is no zeroth cell.
- xindex = nint(potlenx*(xir+potxmax)/(2.*potxmax) + 1)
- yindex = nint(potleny*(yir+potymax)/(2.*potymax) + 1)
- zindex = nint(potlenz*(zir+potzmax)/(2.*potzmax) + 1)
+ xp1 = xir+dxpot; xm1 = xir-dxpot
+ yp1 = yir+dypot; ym1 = yir-dypot
+ zp1 = zir+dzpot; zm1 = zir-dzpot
 
  !--Look up the potential at the grid cell, and use Finite Diffs to
  !--find the forces, using the size of grid cells as the distance element.
- pot    = newpot3D(zindex,xindex,yindex)
- fextxr = (pot - newpot3D(zindex,xindex+1,yindex))/dxpot
- fextyr = (pot - newpot3D(zindex,xindex,yindex+1))/dypot
- fextzr = (pot - newpot3D(zindex+1,xindex,yindex))/dzpot
+ if (ti <= fullBS) then
+
+     pot    = TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xir,yir,zir)*ti/fullBS + &
+              TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xir,yir,zir)*(1.0-ti/fullBS)
+
+     fextxr = -((TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xp1,yir,zir)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xp1,yir,zir)*(1.0-ti/fullBS)) - &
+                (TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xm1,yir,zir)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xm1,yir,zir)*(1.0-ti/fullBS)))/(2.*dxpot)
+     fextyr = -((TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xir,yp1,zir)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xir,yp1,zir)*(1.0-ti/fullBS))- &
+                (TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xir,ym1,zir)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xir,ym1,zir)*(1.0-ti/fullBS)))/(2.*dypot)
+     fextzr = -((TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xir,yir,zp1)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xir,yir,zp1)*(1.0-ti/fullBS))- &
+                (TriLinInterp(newpot3D        ,potlenz,potlenx,potleny,xir,yir,zm1)*ti/fullBS + &
+                 TriLinInterp(newpot3D_initial,potlenz,potlenx,potleny,xir,yir,zm1)*(1.0-ti/fullBS)))/(2.*dzpot)
+
+ else
+
+    pot    = TriLinInterp(newpot3D,potlenz,potlenx,potleny,xir,yir,zir)
+
+    fextxr = -(TriLinInterp(newpot3D,potlenz,potlenx,potleny,xp1,yir,zir) - &
+               TriLinInterp(newpot3D,potlenz,potlenx,potleny,xm1,yir,zir))/(2.*dxpot)
+    fextyr = -(TriLinInterp(newpot3D,potlenz,potlenx,potleny,xir,yp1,zir) - &
+               TriLinInterp(newpot3D,potlenz,potlenx,potleny,xir,ym1,zir))/(2.*dypot)
+    fextzr = -(TriLinInterp(newpot3D,potlenz,potlenx,potleny,xir,yir,zp1) - &
+               TriLinInterp(newpot3D,potlenz,potlenx,potleny,xir,yir,zm1))/(2.*dzpot)
+
+ endif
 
  !--Rotate the reference frame of the forces back to those of the observer,
- !--rather than the arms.
- fxi= + (fextxr*cos(-ti*phir)-fextyr*sin(-ti*phir))
- fyi= + (fextxr*sin(-ti*phir)+fextyr*cos(-ti*phir))
- fzi= + fextzr
+ !--rather than the bar.
+
+ fxi = fextxr*cos(-angle)-fextyr*sin(-angle)
+ fyi = fextxr*sin(-angle)+fextyr*cos(-angle)
+ fzi = fextzr
 
  !--Update the input forces/potential
  phi    = phi    + pot
  fextxi = fextxi + fxi
  fextyi = fextyi + fyi
  fextzi = fextzi + fzi
+
+
  return
+
 end subroutine BINReadPot3D
+
+function TriLinInterp(f,Nz,Nx,Ny,xi,yi,zi)
+
+ implicit none
+ integer     , intent(in) :: Nz,Nx,Ny
+ real(kind=8), intent(in) :: xi,yi,zi
+ real(kind=8), intent(in) :: f(Nz,Nx,Ny)
+ real(kind=8) :: c00,c01,c10,c11,c0,c1
+ real(kind=8) :: xir,yir,zir,radius,coeff,TriLinInterp
+ real(kind=8) :: xd,yd,zd
+ integer :: xindex,yindex,zindex
+
+ !-- a rough boundary condition 
+ xir = xi; yir = yi; zir = zi
+
+ if (xi .ge. potxmax .or. xi .le. -potxmax .or. &
+     yi .ge. potymax .or. yi .le. -potymax .or. &
+     zi .ge. potzmax .or. zi .le. -potzmax ) then
+
+     if ( (xi .lt. potxmax .and. xi .gt. -potxmax) .and. &
+          (yi .lt. potymax .and. yi .gt. -potymax)) then
+
+          xindex = floor((xir+potxmax)/dxpot + 1)
+          yindex = floor((yir+potymax)/dypot + 1)
+          zindex = potlenz
+
+          coeff = f(zindex,xindex,yindex)       !--assume up-down symmetry       
+          TriLinInterp = coeff*potzmax/zi
+
+          return
+
+     else
+
+          radius = sqrt(xir**2+yir**2)
+          coeff  = f(floor(potlenz/2.),floor(potlenx/2.),1)
+          TriLinInterp = coeff*potzmax/zi*potxmax/radius  !--assume potxmax = potymax
+
+          return
+
+     endif
+
+  endif
+
+ !--Use the array here, i.e. this routine will put the particles in
+ !--an appropriate grid cell and simply read in fextxi, fextyi, fextzi.
+ !--The +1 grid cell is because there is no zeroth cell.
+
+ xindex = floor((xir+potxmax)/dxpot + 1)
+ yindex = floor((yir+potymax)/dypot + 1)
+ zindex = floor((zir+potzmax)/dzpot + 1)
+
+ xd  = (xir - (dxpot*(xindex-1) - potxmax))/dxpot
+ yd  = (yir - (dypot*(yindex-1) - potymax))/dypot
+ zd  = (zir - (dzpot*(zindex-1) - potzmax))/dzpot
+
+ c00 = f(zindex  ,xindex  ,yindex  )*(1.-xd) &
+      +f(zindex  ,xindex+1,yindex  )*xd
+ c01 = f(zindex+1,xindex  ,yindex  )*(1.-xd) &
+      +f(zindex+1,xindex+1,yindex  )*xd
+ c10 = f(zindex  ,xindex  ,yindex+1)*(1.-xd) &
+      +f(zindex  ,xindex+1,yindex+1)*xd
+ c11 = f(zindex+1,xindex  ,yindex+1)*(1.-xd) &
+      +f(zindex+1,xindex+1,yindex+1)*xd
+
+ c0  = c00*(1.-yd) + c10*yd
+ c1  = c01*(1.-yd) + c11*yd
+
+ TriLinInterp = c0*(1.-zd) + c1*zd
+
+ return
+
+end function
+
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!~~~~special functions~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+function F2(x)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: x
+  real (kind = 8) :: x2,x3,x4,x5
+  real (kind = 8) :: F2,tmp
+
+  x2 = x*x
+  x3 = x2*x
+  x4 = x3*x
+  x5 = x4*x
+
+  call calcei(-2*x,tmp, 1)
+
+  F2 = (3.0 - exp(-2*x) * (2*x4 + 4*x3 + 6*x2 + 6*x + 3) - &
+        4*x5*tmp)/(20*x3)
+
+
+  return
+
+end
+
+
+
+function dF2dx(x)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: x
+  real (kind = 8) :: x2,x3,x4,x5
+  real (kind = 8) :: dF2dx,tmp
+
+
+  x2 = x*x
+  x3 = x2*x
+  x4 = x3*x
+  x5 = x4*x
+
+  call calcei(-2*x,tmp, 1)
+
+  dF2dx =  (-9.0 + 3.0*exp(-2*x)*(2*x4 + 4*x3 + 6*x2 + 6*x + 3) - &
+             8*x5*tmp)/(20*x4)
+
+end
+
+subroutine Phi2(r, theta, phi, pot)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: r, theta, phi
+  real (kind = 8), intent(out) :: pot
+  real (kind = 8) :: A, v0, rq, G, e
+
+  A  = 0.4 !0.4
+  v0 = 2.2
+  rq = 1.5
+  G = 4.302
+  e = 2.718281828459045235360287471352
+
+  pot = -A * (v0*e)**2 * F2(r/rq) * sin(theta)**2 * cos(2*phi)
+
+  return
+
+end
+
+subroutine dPhi2drthetaphi(r, theta, phi, dPhi2drtp)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: r, theta, phi
+  real (kind = 8), intent(out) :: dPhi2drtp(3)
+  real (kind = 8) :: A, B, v0, rq, G, e, x
+  real (kind = 8) ::sintheta,costheta,cos2phi,sin2phi
+
+  A  = 0.4 !0.4
+  v0 = 2.2
+  rq = 1.5
+  G = 4.302
+  e = 2.718281828459045235360287471352
+
+  sintheta = sin(theta)
+  costheta = cos(theta)
+  cos2phi = cos(2*phi)
+  sin2phi = sin(2*phi)
+
+  x = r/rq
+
+  B = -A * (v0*e)*(v0*e)
+  dPhi2drtp(1) = B * (1.0/rq) * dF2dx(x) * sintheta*sintheta * cos2phi
+  dPhi2drtp(2) = B * F2(x) * 2*sintheta*costheta * cos2phi
+  dPhi2drtp(3) = B * F2(x) * sintheta*sintheta * (-2*sin2phi)
+
+  return
+
+end
+
+subroutine dfdrthetaphi_2_dfdxyz(x, y, z, dfdrtp, dfdxyz)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: x, y, z, dfdrtp(3)
+  real (kind = 8), intent(out) :: dfdxyz(3)
+  real (kind = 8) :: r, R2d, r2, R2d2
+  real (kind = 8) :: M00,M01,M02,M10,M11,M12,M20,M21,M22
+
+  r   = sqrt(x*x + y*y + z*z)
+  R2d = sqrt(x*x + y*y)
+
+  r2   = r*r;
+  R2d2 = R2d*R2d;
+
+  M00 = x/r
+  M01 = y/r
+  M02 = z/r
+  M10 = x*z/(r2 * R2d)
+  M11 = y*z/(r2 * R2d)
+  M12 = -R/r2
+  M20 = -y/R2d2
+  M21 = x/R2d2
+  M22 = 0.0
+  dfdxyz(1) = dfdrtp(1)*M00 + dfdrtp(2)*M10 + dfdrtp(3)*M20
+  dfdxyz(2) = dfdrtp(1)*M01 + dfdrtp(2)*M11 + dfdrtp(3)*M21
+  dfdxyz(3) = dfdrtp(1)*M02 + dfdrtp(2)*M12 + dfdrtp(3)*M22
+
+  return
+
+end
+
+subroutine dPhi2dxyz(x, y, z, dPhidxyz)
+
+  implicit none
+
+  real (kind = 8), intent(in) :: x,y,z
+  real (kind = 8), intent(out) :: dPhidxyz(3)
+  real (kind = 8) :: r, theta, phi
+  real (kind = 8) :: dPhidrtp(3)
+
+  r = sqrt(x*x + y*y + z*z)
+  theta = acos(z/r)
+  phi = atan2(y,x)
+
+  call dPhi2drthetaphi(r,theta,phi,dPhidrtp)
+
+  call dfdrthetaphi_2_dfdxyz(x,y,z,dPhidrtp,dPhidxyz)
+
+  return
+
+end
+
+subroutine calcei(arg, result, int)
+
+!*****************************************************************************80
+!
+!! CALCEI computes exponential integrals.
+!
+!  Discussion:
+!
+!    This routine computes the exponential integrals Ei(x),
+!    E1(x), and  exp(-x)*Ei(x)  for real arguments  x  
+!    where, if x > 0,
+!      Ei(x) = integral (from t=-infinity to t=x) (exp(t)/t),  x > 0,
+!    while, if x < 0,
+!      Ei(x) = -integral (from t=-x to t=infinity) (exp(t)/t),  x < 0,
+!    and where the first integral is a principal value integral.
+!
+!    The packet contains three function type subprograms: EI, EONE,
+!    and EXPEI;  and one subroutine type subprogram: CALCEI.  The
+!    calling statements for the primary entries are:
+!      Y = EI(X),    where  X /= 0,
+!      Y = EONE(X),      where  X > 0,
+!      Y = EXPEI(X),     where  X /= 0,
+!
+!    and where the entry points correspond to the functions Ei(x),
+!    E1(x), and exp(-x)*Ei(x), respectively.  The routine CALCEI
+!    is intended for internal packet use only, all computations within
+!    the packet being concentrated in this routine.  The function
+!    subprograms invoke CALCEI with the statement
+!      CALL CALCEI(ARG,RESULT,INT)
+!    where the parameter usage is as follows
+!
+!      Function      Parameters for CALCEI
+!      Call           ARG         RESULT         INT
+!
+!      EI(X)          X /= 0      Ei(X)            1
+!      EONE(X)        X > 0      -Ei(-X)           2
+!      EXPEI(X)       X /= 0      exp(-X)*Ei(X)    3
+!
+!    The main computation involves evaluation of rational Chebyshev
+!    approximations published in Math. Comp. 22, 641-649 (1968), and
+!    Math. Comp. 23, 289-303 (1969) by Cody and Thacher.  This
+!    transportable program is patterned after the machine-dependent
+!    FUNPACK packet  NATSEI,  but cannot match that version for
+!    efficiency or accuracy.  This version uses rational functions
+!    that theoretically approximate the exponential integrals to
+!    at least 18 significant decimal digits.  The accuracy achieved
+!    depends on the arithmetic system, the compiler, the intrinsic
+!    functions, and proper selection of the machine-dependent
+!    constants.
+!
+!  Modified:
+!
+!    10 January 2016
+!
+!  Author:
+!
+!    Original FORTRAN77 version by William Cody.
+!    FORTRAN90 version by John Burkardt.
+!
+! Explanation of machine-dependent constants.  Let
+!
+!   beta = radix for the floating-point system.
+!   minexp = smallest representable power of beta.
+!   maxexp = smallest power of beta that overflows.
+!
+! Then the following machine-dependent constants must be declared
+!   in DATA statements.  IEEE values are provided as a default.
+!
+!   XBIG = largest argument acceptable to EONE; solution to
+!      equation:
+!         exp(-x)/x * (1 + 1/x) = beta ** minexp.
+!   XINF = largest positive machine number; approximately
+!         beta ** maxexp
+!   XMAX = largest argument acceptable to EI; solution to
+!      equation:  exp(x)/x * (1 + 1/x) = beta ** maxexp.
+!
+! Error returns
+!
+!  The following table shows the types of error that may be
+!  encountered in this routine and the function value supplied
+!  in each case.
+!
+!   Error   Argument   function values for
+!        Range     EI  EXPEI     EONE
+!
+!     UNDERFLOW  (-)X > XBIG     0    -     0
+!     OVERFLOW  X >= XMAX    XINF  -     -
+!     ILLEGAL X   X = 0   -XINF    -XINF     XINF
+!     ILLEGAL X  X < 0   -    -     USE ABS(X)
+!
+  implicit none
+
+  integer ( kind = 4 ) i,int
+  real ( kind = 8 ) &
+    a,arg,b,c,d,exp40,e,ei,f,four,fourty,frac,half,one,p, &
+    plg,px,p037,p1,p2,q,qlg,qx,q1,q2,r,result,s,six,sump, &
+    sumq,t,three,twelve,two,two4,w,x,xbig,xinf,xmax,xmx0, &
+    x0,x01,x02,x11,y,ysq,zero
+  dimension  a(7),b(6),c(9),d(9),e(10),f(10),p(10),q(10),r(10), &
+    s(9),p1(10),q1(9),p2(10),q2(9),plg(4),qlg(4),px(10),qx(10)
+!
+!  Mathematical constants
+!  EXP40 = exp(40)
+!  X0 = zero of Ei
+!  X01/X11 + X02 = zero of Ei to extra precision
+!
+  data zero,p037,half,one,two/0.0d0,0.037d0,0.5d0,1.0d0,2.0d0/, &
+       three,four,six,twelve,two4/3.0d0,4.0d0,6.0d0,12.d0,24.0d0/, &
+       fourty,exp40/40.0d0,2.3538526683701998541d17/, &
+       x01,x11,x02/381.5d0,1024.0d0,-5.1182968633365538008d-5/, &
+       x0/3.7250741078136663466d-1/
+!
+!  Machine-dependent constants
+!
+  data xinf/1.79d+308/,xmax/716.351d0/,xbig/701.84d0/
+!
+! Coefficients  for -1.0 <= X < 0.0
+!
+  data a/1.1669552669734461083368d2, 2.1500672908092918123209d3, &
+     1.5924175980637303639884d4, 8.9904972007457256553251d4, &
+     1.5026059476436982420737d5,-1.4815102102575750838086d5, &
+     5.0196785185439843791020d0/
+  data b/4.0205465640027706061433d1, 7.5043163907103936624165d2, &
+     8.1258035174768735759855d3, 5.2440529172056355429883d4, &
+     1.8434070063353677359298d5, 2.5666493484897117319268d5/
+!
+! Coefficients for -4.0 <= X < -1.0
+!
+  data c/3.828573121022477169108d-1, 1.107326627786831743809d+1, &
+     7.246689782858597021199d+1, 1.700632978311516129328d+2, &
+     1.698106763764238382705d+2, 7.633628843705946890896d+1, &
+     1.487967702840464066613d+1, 9.999989642347613068437d-1, &
+     1.737331760720576030932d-8/
+  data d/8.258160008564488034698d-2, 4.344836335509282083360d+0, &
+     4.662179610356861756812d+1, 1.775728186717289799677d+2, &
+     2.953136335677908517423d+2, 2.342573504717625153053d+2, &
+     9.021658450529372642314d+1, 1.587964570758947927903d+1, &
+     1.000000000000000000000d+0/
+!
+! Coefficients for X < -4.0
+!
+  data e/1.3276881505637444622987d+2,3.5846198743996904308695d+4, &
+     1.7283375773777593926828d+5,2.6181454937205639647381d+5, &
+     1.7503273087497081314708d+5,5.9346841538837119172356d+4, &
+     1.0816852399095915622498d+4,1.0611777263550331766871d03, &
+     5.2199632588522572481039d+1,9.9999999999999999087819d-1/
+  data f/3.9147856245556345627078d+4,2.5989762083608489777411d+5, &
+     5.5903756210022864003380d+5,5.4616842050691155735758d+5, &
+     2.7858134710520842139357d+5,7.9231787945279043698718d+4, &
+     1.2842808586627297365998d+4,1.1635769915320848035459d+3, &
+     5.4199632588522559414924d+1,1.0d0/
+!
+!  Coefficients for rational approximation to ln(x/a), |1-x/a| < .1
+!
+  data plg/-2.4562334077563243311d+01,2.3642701335621505212d+02, &
+       -5.4989956895857911039d+02,3.5687548468071500413d+02/
+  data qlg/-3.5553900764052419184d+01,1.9400230218539473193d+02, &
+       -3.3442903192607538956d+02,1.7843774234035750207d+02/
+!
+! Coefficients for  0.0 < X < 6.0,
+!  ratio of Chebyshev polynomials
+!
+  data p/-1.2963702602474830028590d01,-1.2831220659262000678155d03, &
+     -1.4287072500197005777376d04,-1.4299841572091610380064d06, &
+     -3.1398660864247265862050d05,-3.5377809694431133484800d08, &
+      3.1984354235237738511048d08,-2.5301823984599019348858d10, &
+      1.2177698136199594677580d10,-2.0829040666802497120940d11/
+  data q/ 7.6886718750000000000000d01,-5.5648470543369082846819d03, &
+      1.9418469440759880361415d05,-4.2648434812177161405483d06, &
+      6.4698830956576428587653d07,-7.0108568774215954065376d08, &
+      5.4229617984472955011862d09,-2.8986272696554495342658d10, &
+      9.8900934262481749439886d10,-8.9673749185755048616855d10/
+!
+! J-fraction coefficients for 6.0 <= X < 12.0
+!
+  data r/-2.645677793077147237806d00,-2.378372882815725244124d00, &
+     -2.421106956980653511550d01, 1.052976392459015155422d01, &
+      1.945603779539281810439d01,-3.015761863840593359165d01, &
+      1.120011024227297451523d01,-3.988850730390541057912d00, &
+      9.565134591978630774217d00, 9.981193787537396413219d-1/
+  data s/ 1.598517957704779356479d-4, 4.644185932583286942650d00, &
+      3.697412299772985940785d02,-8.791401054875438925029d00, &
+      7.608194509086645763123d02, 2.852397548119248700147d01, &
+      4.731097187816050252967d02,-2.369210235636181001661d02, &
+      1.249884822712447891440d00/
+!
+! J-fraction coefficients for 12.0 <= X < 24.0
+!
+  data p1/-1.647721172463463140042d00,-1.860092121726437582253d01, &
+      -1.000641913989284829961d01,-2.105740799548040450394d01, &
+      -9.134835699998742552432d-1,-3.323612579343962284333d01, &
+       2.495487730402059440626d01, 2.652575818452799819855d01, &
+      -1.845086232391278674524d00, 9.999933106160568739091d-1/
+  data q1/ 9.792403599217290296840d01, 6.403800405352415551324d01, &
+       5.994932325667407355255d01, 2.538819315630708031713d02, &
+       4.429413178337928401161d01, 1.192832423968601006985d03, &
+       1.991004470817742470726d02,-1.093556195391091143924d01, &
+       1.001533852045342697818d00/
+!
+! J-fraction coefficients for  X >= 24.0
+!
+  data p2/ 1.75338801265465972390d02,-2.23127670777632409550d02, &
+      -1.81949664929868906455d01,-2.79798528624305389340d01, &
+      -7.63147701620253630855d00,-1.52856623636929636839d01, &
+      -7.06810977895029358836d00,-5.00006640413131002475d00, &
+      -3.00000000320981265753d00, 1.00000000000000485503d00/
+  data q2/ 3.97845977167414720840d04, 3.97277109100414518365d00, &
+       1.37790390235747998793d02, 1.17179220502086455287d02, &
+       7.04831847180424675988d01,-1.20187763547154743238d01, &
+      -7.99243595776339741065d00,-2.99999894040324959612d00, &
+       1.99999999999048104167d00/
+
+  x = arg
+
+  if (x == zero) then
+
+    ei = -xinf
+    if (int == 2) ei = -ei
+
+  else if ((x < zero) .or. (int == 2)) then
+!
+! Calculate EI for negative argument or for E1.
+!
+    y = abs(x)
+
+    if (y <= one) then
+
+      sump = a(7) * y + a(1)
+      sumq = y + b(1)
+      do i = 2, 6
+        sump = sump * y + a(i)
+        sumq = sumq * y + b(i)
+      end do
+      ei = log(y) - sump / sumq
+      if (int == 3) ei = ei * exp(y)
+
+    else if (y <= four) then
+
+      w = one / y
+      sump = c(1)
+      sumq = d(1)
+      do i = 2, 9
+        sump = sump * w + c(i)
+        sumq = sumq * w + d(i)
+      end do
+      ei = - sump / sumq
+      if (int /= 3) ei = ei * exp(-y)
+
+    else
+
+      if ((y > xbig) .and. (int < 3)) then
+        ei = zero
+      else
+        w = one / y
+        sump = e(1)
+        sumq = f(1)
+        do i = 2, 10
+          sump = sump * w + e(i)
+          sumq = sumq * w + f(i)
+        end do
+        ei = -w * (one - w * sump / sumq )
+        if (int /= 3) ei = ei * exp(-y)
+      end if
+
+    end if
+
+    if (int == 2) ei = -ei
+
+  else if (x < six) then
+!
+!  To improve conditioning, rational approximations are expressed
+!  in terms of Chebyshev polynomials for 0 <= X < 6, and in
+!  continued fraction form for larger X.
+!
+    t = x + x
+    t = t / three - two
+    px(1) = zero
+    qx(1) = zero
+    px(2) = p(1)
+    qx(2) = q(1)
+    do i = 2, 9
+      px(i+1) = t * px(i) - px(i-1) + p(i)
+      qx(i+1) = t * qx(i) - qx(i-1) + q(i)
+    end do
+    sump = half * t * px(10) - px(9) + p(10)
+    sumq = half * t * qx(10) - qx(9) + q(10)
+    frac = sump / sumq
+    xmx0 = (x - x01/x11) - x02
+
+    if (abs(xmx0) >= p037) then
+
+      ei = log(x/x0) + xmx0 * frac
+
+      if (int == 3) ei = exp(-x) * ei
+
+    else
+!
+!  Special approximation to  ln(X/X0)  for X close to X0
+!
+      y = xmx0 / (x + x0)
+      ysq = y*y
+      sump = plg(1)
+      sumq = ysq + qlg(1)
+      do i = 2, 4
+        sump = sump*ysq + plg(i)
+        sumq = sumq*ysq + qlg(i)
+      end do
+      ei = (sump / (sumq*(x+x0)) + frac) * xmx0
+      if (int == 3) ei = exp(-x) * ei
+
+    end if
+
+  else if (x < twelve) then
+
+    frac = zero
+    do i = 1, 9
+      frac = s(i) / (r(i) + x + frac)
+    end do
+    ei = (r(10) + frac) / x
+    if (int /= 3) ei = ei * exp(x)
+
+  else if (x <= two4) then
+
+    frac = zero
+    do i = 1, 9
+      frac = q1(i) / (p1(i) + x + frac)
+    end do
+    ei = (p1(10) + frac) / x
+    if (int /= 3) ei = ei * exp(x)
+
+  else
+
+    if ((x >= xmax) .and. (int < 3)) then
+
+      ei = xinf
+
+    else
+
+      y = one / x
+      frac = zero
+      do i = 1, 9
+        frac = q2(i) / (p2(i) + x + frac)
+      end do
+      frac = p2(10) + frac
+      ei = y + y * y * frac
+
+      if (int /= 3) then
+        if (x <= xmax-two4) then
+          ei = ei * exp(x)
+        else
+!
+!  Calculation reformulated to avoid premature overflow
+!
+          ei = (ei * exp(x-fourty)) * exp40
+        end if
+
+      end if
+
+    end if
+
+  end if
+
+  result = ei
+
+  return
+
+end
 
 !----------------------------------------------------------------
 end module extern_spiral

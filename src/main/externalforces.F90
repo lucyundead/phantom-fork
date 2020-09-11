@@ -108,7 +108,8 @@ subroutine externalforce(iexternalforce,xi,yi,zi,hi,ti,fextxi,fextyi,fextzi,phi,
   pichardo_potential,Wang_bar,LogDisc,&
   MNDisc,KFDiscSp,PlumBul,HernBul,HubbBul,COhalo,Flathalo,AMhalo,KBhalo,LMXbar,&
   LMTbar,Orthog_basisbar,DehnenBar,VogtSbar,BINReadPot3D,NFWhalo,&
-  ibar,idisk,ihalo,ibulg,iarms,iread,Wadabar
+  ibar,idisk,ihalo,ibulg,iarms,iread,Wadabar,&
+  FerrersBar,SormaniBar,LogBar,Junqueira2013
  use extern_densprofile, only:densityprofile_force
  use extern_Bfield,      only:get_externalB_force
  use extern_staticsine,  only:staticsine_force
@@ -319,6 +320,15 @@ subroutine externalforce(iexternalforce,xi,yi,zi,hi,ti,fextxi,fextyi,fextzi,phi,
     case(6)
        !--Wada bar~Sinusoidal bar similar to Dehnen bar:
        call WadaBar(xi,yi,d2,phii,ti,hi,phi,fextxi,fextyi)
+    case(7)
+       !--Ferrers ellipsoid 
+       call FerrersBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+    case(8)
+       !--Sormani quadrapole potential 
+       call SormaniBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
+    case(9)
+       !--Logarithmic disk quadrapole potential 
+       call LogBar(xi,yi,zi,ti,phi,fextxi,fextyi,fextzi)
     end select
 
     !-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=READIN-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

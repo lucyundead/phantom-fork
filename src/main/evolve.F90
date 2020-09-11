@@ -211,6 +211,14 @@ subroutine evol(infile,logfile,evfile,dumpfile)
  call reset_timer(timer_extf,'extf')
 
  call flush(iprint)
+
+#ifdef LIVE_ANALYSIS
+ if (id==master) then
+    call do_analysis(dumpfile,numfromfile(dumpfile),xyzh,vxyzu, &
+                     massoftype(igas),npart,time,ianalysis)
+ endif
+#endif
+
 !
 ! --------------------- main loop ----------------------------------------
 !
@@ -407,6 +415,14 @@ subroutine evol(infile,logfile,evfile,dumpfile)
        dt_changed = .false.
 #endif
     endif
+
+#ifdef LIVE_ANALYSIS
+    if (id==master) then
+        call do_analysis(dumpfile,numfromfile(dumpfile),xyzh,vxyzu, &
+                         massoftype(igas),npart,time,ianalysis)
+    endif
+#endif
+
 !
 !--write to data file if time is right
 !
@@ -496,12 +512,6 @@ subroutine evol(infile,logfile,evfile,dumpfile)
        call increment_timer(timer_io,t2-t1,tcpu2-tcpu1)
        timer_io%cpu   = reduce_mpi('+',timer_io%cpu)
 
-#ifdef LIVE_ANALYSIS
-       if (id==master) then
-          call do_analysis(dumpfile,numfromfile(dumpfile),xyzh,vxyzu, &
-                           massoftype(igas),npart,time,ianalysis)
-       endif
-#endif
        if (id==master) then
           call print_timinginfo(iprint,nsteps,nsteplast,timer_fromstart,timer_lastdump,timer_step,timer_ev,timer_io,&
                                              timer_dens,timer_force,timer_link,timer_extf)

@@ -37,7 +37,7 @@ module forces
     modid="$Id$"
 
  integer, parameter :: maxcellcache = 50000
-
+ real, public   :: fxyzu_press(3,3000000), fxyzu_visco(3,3000000)
  public :: force
 
  !--indexing for xpartveci array
@@ -1028,6 +1028,8 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
 #endif
 
  fsum(:) = 0.
+ fxyzu_press(:,i) = 0
+ fxyzu_visco(:,i) = 0
  vsigmax = 0.
  pmassonrhoi = pmassi*rho1i
  hfacgrkern  = hi41*cnormk*gradhi
@@ -1636,6 +1638,36 @@ subroutine compute_forces(i,iamgasi,iamdusti,xpartveci,hi,hi1,hi21,hi41,gradhi,g
           fsum(ifyi) = fsum(ifyi) - runiy*(gradp + fgrav) - projsy
           fsum(ifzi) = fsum(ifzi) - runiz*(gradp + fgrav) - projsz
           fsum(ipot) = fsum(ipot) + pmassj*phii ! no need to symmetrise (see PM07)
+
+          fxyzu_press(1,i) = fxyzu_press(1,i) - runix*(pmassj*pro2i*grkerni &
+                                                      +pmassj*pro2j*grkernj)
+          fxyzu_press(2,i) = fxyzu_press(2,i) - runiy*(pmassj*pro2i*grkerni &
+                                                      +pmassj*pro2j*grkernj)
+          fxyzu_press(3,i) = fxyzu_press(3,i) - runiz*(pmassj*pro2i*grkerni &
+                                                      +pmassj*pro2j*grkernj)
+
+          if (projv < 0.) then
+
+            fxyzu_visco(1,i) = fxyzu_visco(1,i) - &
+                               runix*((pmassj*(-0.5*rho1i*vsigavi*projv)*grkerni)&
+                                     +(pmassj*(-0.5*rho1j*vsigavj*projv)*grkernj))
+            fxyzu_visco(2,i) = fxyzu_visco(2,i) - &
+                               runiy*((pmassj*(-0.5*rho1i*vsigavi*projv)*grkerni)&
+                                     +(pmassj*(-0.5*rho1j*vsigavj*projv)*grkernj))
+            fxyzu_visco(3,i) = fxyzu_visco(3,i) - &
+                               runiz*((pmassj*(-0.5*rho1i*vsigavi*projv)*grkerni)&
+                                     +(pmassj*(-0.5*rho1j*vsigavj*projv)*grkernj))
+
+          else
+
+            fxyzu_visco(1,i) = fxyzu_visco(1,i) + 0.0
+            fxyzu_visco(2,i) = fxyzu_visco(2,i) + 0.0
+            fxyzu_visco(3,i) = fxyzu_visco(3,i) + 0.0
+
+          endif
+
+
+
 
           !--calculate divv for use in du, h prediction, av switch etc.
           fsum(idrhodti) = fsum(idrhodti) + projv*grkerni
